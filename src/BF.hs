@@ -48,18 +48,6 @@ import Data.Maybe
 
 import Instructions
 
-shiftR :: Int -> [Inst]
-shiftR n
-  | n > 0 = replicate n ShiftR
-  | n < 0 = replicate (-n) ShiftL
-  | otherwise = []
-
-shiftL :: Int -> [Inst]
-shiftL n
-  | n > 0 = replicate n ShiftL
-  | n < 0 = replicate (-n) ShiftR
-  | otherwise = []
-
 newtype BF a
   = BF
   { runBF :: WriterT [Inst] (State StackState) a
@@ -93,10 +81,10 @@ goto (Address addr) =
   BF $ do
     sp <- lift $ gets pointer
     lift $ modify (\s -> s { pointer = addr })
-    tell . shiftR $ addr - sp
+    tell [ShiftR $ addr - sp]
 
 incs :: Int -> BF ()
-incs n = BF . tell $ replicate n Inc
+incs n = BF . tell $ [Inc n]
 
 incr :: Address -> BF ()
 incr addr = do
@@ -106,7 +94,7 @@ incr addr = do
 clear :: Address -> BF ()
 clear addr = do
   goto addr
-  BF . tell $ [Loop [Dec]]
+  BF . tell $ [Loop [Dec 1]]
 
 wrt :: Address -> BF ()
 wrt addr = do
@@ -179,7 +167,7 @@ abort :: BF ()
 abort = BF $ tell [Abort]
 
 decs :: Int -> BF ()
-decs n = BF . tell $ replicate n Dec
+decs n = BF . tell $ [Dec n]
 
 decr :: Address -> BF ()
 decr addr = do
@@ -281,9 +269,9 @@ dvd top bottom = do
 
   while should_loop $ do
     incr quotient
-    remainder' <- sub remainder bottom
-    mov remainder' remainder
-    free remainder'
+    res <- sub remainder bottom
+    mov res remainder
+    free res
 
     should_loop' <- gte remainder bottom
     mov should_loop' should_loop
@@ -369,30 +357,30 @@ writeIx val ix a = do
   goto $ arrayAddress a
 
   BF $ tell
-    [ ShiftR
+    [ ShiftR 1
     , Loop
-      [ ShiftR, ShiftR, ShiftR, Loop
-        [ Dec, ShiftL, ShiftL, ShiftL, ShiftL
-        , Inc, ShiftR, ShiftR, ShiftR, ShiftR
+      [ ShiftR 3, Loop
+        [ Dec 1, ShiftL 4
+        , Inc 1, ShiftR 4
         ]
-      , ShiftL, Loop [ Dec, ShiftR, Inc, ShiftL ]
-      , ShiftL, Loop [ Dec, ShiftR, Inc, ShiftL ]
-      , ShiftL, Loop [ Dec, ShiftR, Inc, ShiftL ]
-      , ShiftR, Dec
+      , ShiftL 1, Loop [ Dec 1, ShiftR 1, Inc 1, ShiftL 1 ]
+      , ShiftL 1, Loop [ Dec 1, ShiftR 1, Inc 1, ShiftL 1 ]
+      , ShiftL 1, Loop [ Dec 1, ShiftR 1, Inc 1, ShiftL 1 ]
+      , ShiftR 1, Dec 1
       ]
-    , ShiftR, ShiftR, ShiftR, Loop [Dec]
-    , ShiftL, Loop [ Dec, ShiftR, Inc, ShiftL ]
-    , ShiftL, Loop
-      [ Loop [ Dec, ShiftL, Inc, ShiftR ]
-      , ShiftL, ShiftL, ShiftL
+    , ShiftR 3, Loop [Dec 1]
+    , ShiftL 1, Loop [ Dec 1, ShiftR 1, Inc 1, ShiftL 1 ]
+    , ShiftL 1, Loop
+      [ Loop [ Dec 1, ShiftL 1, Inc 1, ShiftR 1 ]
+      , ShiftL 3
       , Loop
-        [ ShiftL, ShiftL, ShiftL, Loop
-          [ Dec, ShiftR, ShiftR, ShiftR, ShiftR
-          , Inc, ShiftL, ShiftL, ShiftL, ShiftL
+        [ ShiftL 3, Loop
+          [ Dec 1, ShiftR 4
+          , Inc 1, ShiftL 4
           ]
         ]
-      , ShiftR, ShiftR, Dec ]
-    , ShiftL, ShiftL
+      , ShiftR 2, Dec 1 ]
+    , ShiftL 2
     ]
 
 -- | Returns a pointer to a copy of the value at the index
@@ -428,29 +416,29 @@ readIx ix a = do
   goto addr
 
   BF $ tell
-    [ ShiftR, Loop
-      [ ShiftR, ShiftR, ShiftR, Loop
-        [ Dec, ShiftL, ShiftL, ShiftL, ShiftL
-        , Inc, ShiftR, ShiftR, ShiftR, ShiftR
+    [ ShiftR 1, Loop
+      [ ShiftR 3, Loop
+        [ Dec 1, ShiftL 4
+        , Inc 1, ShiftR 4
         ]
-      , ShiftL, ShiftL, Loop [ Dec, ShiftR, Inc, ShiftL ]
-      , ShiftL, Loop [ Dec, ShiftR, Inc, ShiftL ]
-      , ShiftR, Dec
+      , ShiftL 2, Loop [ Dec 1, ShiftR 1, Inc 1, ShiftL 1 ]
+      , ShiftL 1, Loop [ Dec 1, ShiftR 1, Inc 1, ShiftL 1 ]
+      , ShiftR 1, Dec 1
       ]
-    , ShiftR, ShiftR, ShiftR, Loop
-      [ Dec, ShiftL, Inc, ShiftL, ShiftL, Inc, ShiftR, ShiftR, ShiftR ]
-    , ShiftL, ShiftL, ShiftL, Loop
-      [ Dec, ShiftR, ShiftR, ShiftR, Inc, ShiftL, ShiftL, ShiftL ]
-    , ShiftR, Loop
-      [ Loop [ Dec, ShiftL, Inc, ShiftR ]
-      , ShiftR, Loop [ Dec, ShiftL, Inc, ShiftR ]
-      , ShiftL, ShiftL, ShiftL, ShiftL, Loop
-        [ Dec, ShiftR, ShiftR, ShiftR, ShiftR
-        , Inc, ShiftL, ShiftL, ShiftL, ShiftL
+    , ShiftR 3, Loop
+      [ Dec 1, ShiftL 1, Inc 1, ShiftL 2, Inc 1, ShiftR 3 ]
+    , ShiftL 3, Loop
+      [ Dec 1, ShiftR 3, Inc 1, ShiftL 3 ]
+    , ShiftR 1, Loop
+      [ Loop [ Dec 1, ShiftL 1, Inc 1, ShiftR 1 ]
+      , ShiftR 1, Loop [ Dec 1, ShiftL 1, Inc 1, ShiftR 1 ]
+      , ShiftL 4, Loop
+        [ Dec 1, ShiftR 4
+        , Inc 1, ShiftL 4
         ]
-      , ShiftR, ShiftR, Dec
+      , ShiftR 2, Dec 1
       ]
-    , ShiftL, ShiftL
+    , ShiftL 2
     ]
 
   goto addr
