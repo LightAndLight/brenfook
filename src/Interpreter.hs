@@ -1,9 +1,13 @@
+{-# language FlexibleContexts #-}
 {-# language RankNTypes #-}
 
 module Interpreter where
 
+import Control.Monad.State
+import Control.Monad.Reader
 import Control.Monad.Writer
 import Data.Char
+import Data.Foldable
 import Data.Functor
 import Data.Monoid
 import qualified Data.Vector.Mutable as M
@@ -12,6 +16,91 @@ import Data.Vector (Vector, freeze)
 
 import Instructions
 
+--
+--
+--
+-- Faster mutable vector version
+--
+--
+--
+runInsts' :: Int -> Bool -> [Inst] -> IO (Vector Int)
+runInsts' size debug insts = do
+  tape <- M.new size
+  M.set tape 0
+  void $
+    flip runReaderT tape .
+    flip runStateT 0 $
+    traverse_ runInst insts
+  freeze tape
+  where
+    onCurrentCell
+      :: (MonadIO m, MonadState Int m, MonadReader (IOVector a) m)
+      => (IOVector a -> Int -> m b) -> m b
+    onCurrentCell f = do
+      tape <- ask
+      pointer <- get
+      f tape pointer
+
+    readCurrentCell
+      :: (MonadIO m, MonadState Int m, MonadReader (IOVector a) m)
+      => m a
+    readCurrentCell = onCurrentCell (\t p -> liftIO $ M.read t p)
+
+    writeCurrentCell
+      :: (MonadIO m, MonadState Int m, MonadReader (IOVector a) m)
+      => a -> m ()
+    writeCurrentCell val = onCurrentCell (\t p -> liftIO $ M.write t p val)
+
+    runInst inst =
+      case inst of
+        Inc n 
+          | n < 0 -> runInst $ Dec (-n)
+          | otherwise ->
+              onCurrentCell (\t p -> liftIO $ M.modify t (+n) p)
+        Dec n
+          | n < 0 -> runInst $ Inc (-n)
+          | otherwise ->
+              onCurrentCell (\t p -> liftIO $ M.modify t (\v -> if v - n >= 0 then v - n else 0) p)
+
+        ShiftR n
+          | n < 0 -> runInst $ ShiftL (-n)
+          | otherwise ->
+              modify $ \p ->
+                if p + n >= size
+                  then size - 1
+                  else p + n
+
+        ShiftL n
+          | n < 0 -> runInst $ ShiftR (-n)
+          | otherwise ->
+              modify $ \p ->
+                if p - n <= 0
+                  then 0
+                  else p - n
+        
+        Print -> do
+          val <- readCurrentCell
+          liftIO $ putStr [chr val]
+
+        Input -> do
+          input <- liftIO getChar
+          writeCurrentCell $ ord input
+
+        Loop inner -> do
+          val <- readCurrentCell
+          when (val /= 0) $ do
+            traverse_ runInst inner
+            runInst $ Loop inner
+
+        Clear -> writeCurrentCell 0
+
+-- 
+--
+--
+-- Slower zipper-based version
+-- 
+--
+--
 data Tape a
   = Tape
   { left :: [a]
@@ -22,62 +111,9 @@ data Tape a
 newTape :: a -> Tape a
 newTape a = Tape { left = [], focus = a, right = repeat a }
 
-runInsts' :: Int -> Bool -> [Inst] -> IO (Vector Int)
-runInsts' size debug insts = do
-  tape <- M.new size
-  M.set tape 0
-  go insts 0 tape
-  freeze tape
-  where
-    go :: [Inst] -> Int -> IOVector Int -> IO Int
-    go [] pointer tape = pure pointer
-    go (inst:rest) pointer tape =
-      case inst of
-        Inc n 
-          | n < 0 -> go (Dec (-n) : rest) pointer tape
-          | otherwise -> do
-              M.modify tape (+n) pointer
-              go rest pointer tape
-        Dec n
-          | n < 0 -> go (Inc (-n) : rest) pointer tape
-          | otherwise -> do
-              M.modify tape (\v -> if v - n >= 0 then v - n else 0) pointer
-              go rest pointer tape
-
-        ShiftR n
-          | n < 0 -> go (ShiftL (-n) : rest) pointer tape
-          | pointer + n >= size -> go rest (size - 1) tape
-          | otherwise -> go rest (pointer + n) tape
-
-        ShiftL n
-          | n < 0 -> go (ShiftR (-n) : rest) pointer tape
-          | pointer - n <= 0 -> go rest 0 tape
-          | otherwise -> go rest (pointer - n) tape
-        
-        Print -> do
-          val <- M.read tape pointer
-          putStr [chr val]
-          go rest pointer tape
-
-        Input -> do
-          input <- getChar
-          M.write tape pointer $ ord input
-          go rest pointer tape
-
-        Loop inner -> do
-          val <- M.read tape pointer
-          if (val /= 0)
-            then do
-              pointer' <- go inner pointer tape
-              go (Loop inner : rest) pointer' tape
-            else go rest pointer tape
-
-        Clear -> do
-          M.write tape pointer 0
-          go rest pointer tape
 
 runInsts :: Bool -> [Inst] -> Tape Int -> IO (Tape Int)
-runInsts debug insts tape = go insts tape
+runInsts debug = go
   where
     runInst :: Inst -> Tape Int -> IO (Tape Int)
     runInst (Inc n) (Tape l f r)
@@ -120,6 +156,14 @@ runInsts debug insts tape = go insts tape
       | otherwise = do
           tape' <- runInst inst tape
           runInsts debug rest tape'
+
+--
+--
+--
+-- Optimization
+--
+--
+--
 
 type Rule = [Inst] -> Writer Any [Inst]
 
